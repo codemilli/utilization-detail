@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, for example v0.1.1"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag name
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Ensure dispatch tag exists
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          git fetch --tags
+          if git rev-parse "${{ steps.tag.outputs.name }}" >/dev/null 2>&1; then
+            echo "Tag already exists locally."
+          else
+            git tag "${{ steps.tag.outputs.name }}" "${GITHUB_SHA}"
+            git push origin "${{ steps.tag.outputs.name }}"
+          fi
+
+      - name: Build app bundle
+        run: ./Scripts/build_app.sh
+
+      - name: Prepare release asset
+        shell: bash
+        run: |
+          mkdir -p ReleaseAssets
+          ditto -c -k --sequesterRsrc --keepParent "Build/Utilization Detail.app" "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip"
+          shasum -a 256 "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip" > "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip.sha256"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          NOTES_FILE="$(mktemp)"
+          cat > "${NOTES_FILE}" <<EOF
+          Automated release for ${{ steps.tag.outputs.name }}.
+
+          Included assets:
+          - UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip
+          - UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip.sha256
+
+          Notes:
+          - Built for Apple Silicon Macs.
+          - Requires macOS 14 or later.
+          - App is not notarized, so first launch may require right-click > Open.
+          EOF
+
+          if gh release view "${{ steps.tag.outputs.name }}" >/dev/null 2>&1; then
+            gh release upload "${{ steps.tag.outputs.name }}" \
+              "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip" \
+              "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip.sha256" \
+              --clobber
+          else
+            gh release create "${{ steps.tag.outputs.name }}" \
+              "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip" \
+              "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-arm64.zip.sha256" \
+              --title "${{ steps.tag.outputs.name }}" \
+              --notes-file "${NOTES_FILE}"
+          fi
