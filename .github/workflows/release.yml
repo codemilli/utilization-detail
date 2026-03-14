@@ -16,13 +16,6 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
-    env:
-      APPLE_SIGNING_CERT_BASE64: ${{ secrets.APPLE_SIGNING_CERT_BASE64 }}
-      APPLE_SIGNING_CERT_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}
-      APPLE_DEVELOPER_IDENTITY: ${{ secrets.APPLE_DEVELOPER_IDENTITY }}
-      APPLE_NOTARY_API_KEY_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_BASE64 }}
-      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
 
     steps:
       - name: Check out repository
@@ -54,60 +47,17 @@ jobs:
 
       - name: Build app bundle
         shell: bash
-        run: chmod +x ./Scripts/build_app.sh ./Scripts/package_release.sh ./Scripts/release_tag.sh ./Scripts/run_app_bundle.sh
+        run: |
+          chmod +x ./Scripts/build_app.sh ./Scripts/release_tag.sh ./Scripts/run_app_bundle.sh
+          APP_VERSION="${{ steps.tag.outputs.name }}" APP_BUILD_NUMBER="${{ github.run_number }}" ./Scripts/build_app.sh
 
-      - name: Verify Apple release secrets
+      - name: Prepare release assets
         shell: bash
         run: |
-          required_vars=(
-            APPLE_SIGNING_CERT_BASE64
-            APPLE_SIGNING_CERT_PASSWORD
-            APPLE_DEVELOPER_IDENTITY
-            APPLE_NOTARY_API_KEY_BASE64
-            APPLE_NOTARY_KEY_ID
-            APPLE_NOTARY_ISSUER_ID
-          )
-
-          for name in "${required_vars[@]}"; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "Missing required secret: ${name}" >&2
-              exit 1
-            fi
-          done
-
-      - name: Import Developer ID certificate
-        shell: bash
-        run: |
-          echo "${{ secrets.APPLE_SIGNING_CERT_BASE64 }}" | base64 --decode > "${RUNNER_TEMP}/signing-cert.p12"
-          KEYCHAIN_PATH="${RUNNER_TEMP}/build.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
-
-          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
-          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
-          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
-          security import "${RUNNER_TEMP}/signing-cert.p12" \
-            -k "${KEYCHAIN_PATH}" \
-            -P "${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
-          security list-keychains -d user -s "${KEYCHAIN_PATH}"
-          security default-keychain -d user -s "${KEYCHAIN_PATH}"
-          security find-identity -v "${KEYCHAIN_PATH}"
-
-      - name: Prepare notary API key
-        shell: bash
-        run: |
-          KEY_PATH="${RUNNER_TEMP}/AuthKey_${{ secrets.APPLE_NOTARY_KEY_ID }}.p8"
-          echo "${{ secrets.APPLE_NOTARY_API_KEY_BASE64 }}" | base64 --decode > "${KEY_PATH}"
-          echo "APPLE_NOTARY_KEY_PATH=${KEY_PATH}" >> "${GITHUB_ENV}"
-
-      - name: Package notarized release
-        shell: bash
-        env:
-          CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_IDENTITY }}
-          ENABLE_NOTARIZATION: "1"
-        run: ./Scripts/package_release.sh "${{ steps.tag.outputs.name }}"
+          ARCH="$(uname -m)"
+          mkdir -p ReleaseAssets
+          ditto -c -k --sequesterRsrc --keepParent "Build/Utilization Detail.app" "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-${ARCH}.zip"
+          shasum -a 256 "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-${ARCH}.zip" > "ReleaseAssets/UtilizationDetail-${{ steps.tag.outputs.name }}-macos-${ARCH}.zip.sha256"
 
       - name: Create or update GitHub release
         env:
@@ -126,9 +76,9 @@ jobs:
           - UtilizationDetail-${{ steps.tag.outputs.name }}-macos-${ARCH}.zip.sha256
 
           Notes:
-          - Signed with Developer ID.
-          - Notarized and stapled.
+          - ZIP distribution for macOS.
           - Requires macOS 14 or later.
+          - App is not notarized, so first launch may require right-click > Open.
           EOF
 
           if gh release view "${{ steps.tag.outputs.name }}" >/dev/null 2>&1; then
