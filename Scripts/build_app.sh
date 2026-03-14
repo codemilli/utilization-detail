@@ -12,6 +12,9 @@ CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 PLIST_PATH="${CONTENTS_DIR}/Info.plist"
+APP_VERSION="${APP_VERSION:-0.1.0}"
+APP_BUILD_NUMBER="${APP_BUILD_NUMBER:-1}"
+CODE_SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 
 cd "${ROOT_DIR}"
 
@@ -41,7 +44,7 @@ cp "${EXECUTABLE_PATH}" "${MACOS_DIR}/${EXECUTABLE_NAME}"
 cp -R "${RESOURCE_BUNDLE_PATH}" "${RESOURCES_DIR}/"
 cp "${ICON_PATH}" "${RESOURCES_DIR}/AppIcon.icns"
 
-cat > "${PLIST_PATH}" <<'EOF'
+cat > "${PLIST_PATH}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,9 +66,9 @@ cat > "${PLIST_PATH}" <<'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${APP_BUILD_NUMBER}</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -79,6 +82,14 @@ cat > "${PLIST_PATH}" <<'EOF'
 EOF
 
 chmod +x "${MACOS_DIR}/${EXECUTABLE_NAME}"
+
+if [[ -n "${CODE_SIGN_IDENTITY}" ]]; then
+  codesign --force --deep --options runtime --timestamp --sign "${CODE_SIGN_IDENTITY}" "${APP_DIR}"
+else
+  codesign --force --deep --sign - "${APP_DIR}"
+fi
+
+codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
 
 echo "Built app bundle:"
 echo "${APP_DIR}"
